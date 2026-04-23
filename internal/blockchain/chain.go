@@ -3,6 +3,7 @@ package blockchain
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -14,15 +15,12 @@ var (
 )
 
 type Blockchain struct {
+	mu     sync.RWMutex
 	blocks []Block
 }
 
 func NewBlockchain() *Blockchain {
-	return &Blockchain{
-		blocks: []Block{
-			NewGenesisBlock(time.Unix(0, 0).UTC()),
-		},
-	}
+	return NewBlockchainWithGenesis(time.Unix(0, 0).UTC())
 }
 
 func NewBlockchainWithGenesis(timestamp time.Time) *Blockchain {
@@ -33,16 +31,44 @@ func NewBlockchainWithGenesis(timestamp time.Time) *Blockchain {
 	}
 }
 
+func NewBlockchainFromBlocks(blocks []Block) (*Blockchain, error) {
+	if len(blocks) == 0 {
+		return nil, ErrEmptyChain
+	}
+
+	bc := &Blockchain{
+		blocks: cloneBlockSlice(blocks),
+	}
+
+	if err := bc.Validate(); err != nil {
+		return nil, err
+	}
+
+	return bc, nil
+}
+
 func (bc *Blockchain) Blocks() []Block {
-	out := make([]Block, len(bc.blocks))
-	copy(out, bc.blocks)
-	return out
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	return cloneBlockSlice(bc.blocks)
+}
+
+func (bc *Blockchain) Len() int {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	return len(bc.blocks)
 }
 
 func (bc *Blockchain) LastBlock() (Block, error) {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
 	if len(bc.blocks) == 0 {
 		return Block{}, ErrEmptyChain
 	}
+
 	return bc.blocks[len(bc.blocks)-1], nil
 }
 
@@ -51,24 +77,53 @@ func (bc *Blockchain) AddBlock(transactions []Transaction) Block {
 }
 
 func (bc *Blockchain) AddBlockAt(transactions []Transaction, timestamp time.Time) Block {
-	prev, err := bc.LastBlock()
-	if err != nil {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	if len(bc.blocks) == 0 {
 		genesis := NewGenesisBlock(timestamp)
 		bc.blocks = append(bc.blocks, genesis)
 		return genesis
 	}
 
+	prev := bc.blocks[len(bc.blocks)-1]
 	block := NewBlock(prev.Index+1, prev.Hash, transactions, timestamp)
 	bc.blocks = append(bc.blocks, block)
+
 	return block
 }
 
-func (bc *Blockchain) Validate() error {
-	if len(bc.blocks) == 0 {
+func (bc *Blockchain) ReplaceIfBetter(blocks []Block) error {
+	if len(blocks) == 0 {
 		return ErrEmptyChain
 	}
 
-	for i, block := range bc.blocks {
+	candidate, err := NewBlockchainFromBlocks(blocks)
+	if err != nil {
+		return err
+	}
+
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	if len(candidate.blocks) <= len(bc.blocks) {
+		return nil
+	}
+
+	bc.blocks = cloneBlockSlice(candidate.blocks)
+	return nil
+}
+
+func (bc *Blockchain) Validate() error {
+	bc.mu.RLock()
+	blocks := cloneBlockSlice(bc.blocks)
+	bc.mu.RUnlock()
+
+	if len(blocks) == 0 {
+		return ErrEmptyChain
+	}
+
+	for i, block := range blocks {
 		expectedHash := HashBlock(block)
 		if block.Hash != expectedHash {
 			return fmt.Errorf("%w at index %d", ErrInvalidHash, i)
@@ -81,7 +136,7 @@ func (bc *Blockchain) Validate() error {
 			continue
 		}
 
-		prev := bc.blocks[i-1]
+		prev := blocks[i-1]
 
 		if block.Index != prev.Index+1 {
 			return fmt.Errorf("%w at index %d: got %d, want %d", ErrInvalidBlockSeq, i, block.Index, prev.Index+1)
@@ -93,4 +148,19 @@ func (bc *Blockchain) Validate() error {
 	}
 
 	return nil
+}
+
+func cloneBlockSlice(src []Block) []Block {
+	if len(src) == 0 {
+		return nil
+	}
+
+	dst := make([]Block, len(src))
+	copy(dst, src)
+
+	for i := range dst {
+		dst[i].Transactions = cloneTransactions(dst[i].Transactions)
+	}
+
+	return dst
 }
