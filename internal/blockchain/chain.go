@@ -1,39 +1,96 @@
 package blockchain
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"time"
+)
 
-type Chain struct {
-	Blocks []Block
-	Forks  [][]Block
+var (
+	ErrEmptyChain      = errors.New("blockchain is empty")
+	ErrInvalidHash     = errors.New("invalid block hash")
+	ErrBrokenLink      = errors.New("broken chain link")
+	ErrInvalidBlockSeq = errors.New("invalid block index sequence")
+)
+
+type Blockchain struct {
+	blocks []Block
 }
 
-func NewChain() *Chain {
-	genesis := Block{
-		Index:     0,
-		Timestamp: time.Now().Unix(),
-		PrevHash:  "",
-	}
-	genesis.Hash = CalculateHash(genesis)
-
-	return &Chain{
-		Blocks: []Block{genesis},
+func NewBlockchain() *Blockchain {
+	return &Blockchain{
+		blocks: []Block{
+			NewGenesisBlock(time.Unix(0, 0).UTC()),
+		},
 	}
 }
 
-func (c *Chain) LastBlock() Block {
-	return c.Blocks[len(c.Blocks)-1]
+func NewBlockchainWithGenesis(timestamp time.Time) *Blockchain {
+	return &Blockchain{
+		blocks: []Block{
+			NewGenesisBlock(timestamp),
+		},
+	}
 }
 
-func (c *Chain) AddBlock(b Block) {
-	lastBlock := c.LastBlock()
+func (bc *Blockchain) Blocks() []Block {
+	out := make([]Block, len(bc.blocks))
+	copy(out, bc.blocks)
+	return out
+}
 
-	if b.Index != lastBlock.Index+1 {
-		return
+func (bc *Blockchain) LastBlock() (Block, error) {
+	if len(bc.blocks) == 0 {
+		return Block{}, ErrEmptyChain
+	}
+	return bc.blocks[len(bc.blocks)-1], nil
+}
+
+func (bc *Blockchain) AddBlock(transactions []Transaction) Block {
+	return bc.AddBlockAt(transactions, time.Now().UTC())
+}
+
+func (bc *Blockchain) AddBlockAt(transactions []Transaction, timestamp time.Time) Block {
+	prev, err := bc.LastBlock()
+	if err != nil {
+		genesis := NewGenesisBlock(timestamp)
+		bc.blocks = append(bc.blocks, genesis)
+		return genesis
 	}
 
-	if b.PrevHash == lastBlock.Hash {
-		c.Blocks = append(c.Blocks, b)
-	} else {
-		c.Forks = append(c.Forks, []Block{b})
+	block := NewBlock(prev.Index+1, prev.Hash, transactions, timestamp)
+	bc.blocks = append(bc.blocks, block)
+	return block
+}
+
+func (bc *Blockchain) Validate() error {
+	if len(bc.blocks) == 0 {
+		return ErrEmptyChain
 	}
+
+	for i, block := range bc.blocks {
+		expectedHash := HashBlock(block)
+		if block.Hash != expectedHash {
+			return fmt.Errorf("%w at index %d", ErrInvalidHash, i)
+		}
+
+		if i == 0 {
+			if block.Index != 0 {
+				return fmt.Errorf("%w at index %d: genesis index must be 0", ErrInvalidBlockSeq, i)
+			}
+			continue
+		}
+
+		prev := bc.blocks[i-1]
+
+		if block.Index != prev.Index+1 {
+			return fmt.Errorf("%w at index %d: got %d, want %d", ErrInvalidBlockSeq, i, block.Index, prev.Index+1)
+		}
+
+		if block.PrevHash != prev.Hash {
+			return fmt.Errorf("%w at index %d", ErrBrokenLink, i)
+		}
+	}
+
+	return nil
 }

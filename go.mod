@@ -1,3 +1,3 @@
-module blockchaingo
+module github.com/Max-65/blockchain-go
 
-go 1.25.1
+go 1.26.1
