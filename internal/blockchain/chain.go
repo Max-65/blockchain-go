@@ -93,6 +93,39 @@ func (bc *Blockchain) AddBlockAt(transactions []Transaction, timestamp time.Time
 	return block
 }
 
+func (bc *Blockchain) TryAppendBlock(block Block) error {
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
+
+	if len(bc.blocks) == 0 {
+		if block.Index != 0 {
+			return fmt.Errorf("%w: expected genesis block", ErrInvalidBlockSeq)
+		}
+		if HashBlock(block) != block.Hash {
+			return ErrInvalidHash
+		}
+		bc.blocks = append(bc.blocks, cloneBlock(block))
+		return nil
+	}
+
+	last := bc.blocks[len(bc.blocks)-1]
+
+	if block.Index != last.Index+1 {
+		return fmt.Errorf("%w: got %d, want %d", ErrInvalidBlockSeq, block.Index, last.Index+1)
+	}
+
+	if block.PrevHash != last.Hash {
+		return ErrBrokenLink
+	}
+
+	if HashBlock(block) != block.Hash {
+		return ErrInvalidHash
+	}
+
+	bc.blocks = append(bc.blocks, cloneBlock(block))
+	return nil
+}
+
 func (bc *Blockchain) ReplaceIfBetter(blocks []Block) error {
 	if len(blocks) == 0 {
 		return ErrEmptyChain
@@ -148,6 +181,11 @@ func (bc *Blockchain) Validate() error {
 	}
 
 	return nil
+}
+
+func cloneBlock(b Block) Block {
+	b.Transactions = cloneTransactions(b.Transactions)
+	return b
 }
 
 func cloneBlockSlice(src []Block) []Block {

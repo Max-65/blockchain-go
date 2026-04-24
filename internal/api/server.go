@@ -135,7 +135,7 @@ func (s *Server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 
 	if len(s.Peers) > 0 {
 		snapshot := s.Chain.Blocks()
-		go s.broadcast(snapshot)
+		go s.broadcastNewBlock(block, snapshot)
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
@@ -186,20 +186,19 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(s.Peers) > 0 {
-		snapshot := s.Chain.Blocks()
-		go s.broadcast(snapshot)
-	}
-
 	writeJSON(w, http.StatusOK, map[string]any{
 		"length": s.Chain.Len(),
 		"blocks": s.Chain.Blocks(),
 	})
 }
 
-func (s *Server) broadcast(blocks []blockchain.Block) {
+func (s *Server) broadcastNewBlock(block blockchain.Block, fullChain []blockchain.Block) {
 	for _, peer := range s.Peers {
-		_ = network.PushChain(peer, blocks, 3*time.Second)
+		if err := network.PushBlock(peer, block, 3*time.Second); err == nil {
+			continue
+		}
+
+		_ = network.PushChain(peer, fullChain, 3*time.Second)
 	}
 }
 

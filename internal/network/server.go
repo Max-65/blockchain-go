@@ -109,6 +109,28 @@ func (s *Server) handleConn(conn net.Conn) {
 			Blocks: s.Chain.Blocks(),
 		})
 
+	case MsgPushBlock:
+		if req.Block == nil {
+			_ = enc.Encode(Message{
+				Type:  MsgError,
+				Error: "missing block",
+			})
+			return
+		}
+
+		if err := s.Chain.TryAppendBlock(*req.Block); err != nil {
+			_ = enc.Encode(Message{
+				Type:  MsgError,
+				Error: err.Error(),
+			})
+			return
+		}
+
+		_ = enc.Encode(Message{
+			Type:  MsgBlock,
+			Block: req.Block,
+		})
+
 	default:
 		_ = enc.Encode(Message{
 			Type:  MsgError,

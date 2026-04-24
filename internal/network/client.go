@@ -46,6 +46,26 @@ func PushChain(addr string, blocks []blockchain.Block, timeout time.Duration) er
 	return nil
 }
 
+func PushBlock(addr string, block blockchain.Block, timeout time.Duration) error {
+	resp, err := request(addr, timeout, Message{
+		Type:  MsgPushBlock,
+		Block: &block,
+	})
+	if err != nil {
+		return err
+	}
+
+	if resp.Type == MsgError {
+		return fmt.Errorf("%s", resp.Error)
+	}
+
+	if resp.Type != MsgBlock {
+		return fmt.Errorf("unexpected response type: %s", resp.Type)
+	}
+
+	return nil
+}
+
 func SyncChain(chain *blockchain.Blockchain, addr string, timeout time.Duration) error {
 	blocks, err := FetchChain(addr, timeout)
 	if err != nil {

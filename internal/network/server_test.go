@@ -32,60 +32,50 @@ func startTestServer(t *testing.T, chain *blockchain.Blockchain) (addr string, c
 	return ln.Addr().String(), cleanup
 }
 
-func TestFetchChain(t *testing.T) {
+func TestPushBlock(t *testing.T) {
 	chain := blockchain.NewBlockchainWithGenesis(time.Unix(1700000000, 0).UTC())
-	chain.AddBlockAt(nil, time.Unix(1700000100, 0).UTC())
-	chain.AddBlockAt(nil, time.Unix(1700000200, 0).UTC())
-
 	addr, cleanup := startTestServer(t, chain)
 	defer cleanup()
 
-	var got []blockchain.Block
-	var err error
+	block := blockchain.NewBlock(
+		1,
+		chain.Blocks()[0].Hash,
+		[]blockchain.Transaction{
+			blockchain.NewTransaction("tx-1", "alice", "bob", 10, time.Unix(1700000100, 0).UTC()),
+		},
+		time.Unix(1700000100, 0).UTC(),
+	)
 
-	for i := 0; i < 20; i++ {
-		got, err = FetchChain(addr, 250*time.Millisecond)
-		if err == nil {
-			break
-		}
-		time.Sleep(25 * time.Millisecond)
+	if err := PushBlock(addr, block, 250*time.Millisecond); err != nil {
+		t.Fatalf("push block failed: %v", err)
 	}
 
-	if err != nil {
-		t.Fatalf("fetch failed: %v", err)
+	if chain.Len() != 2 {
+		t.Fatalf("expected chain length 2, got %d", chain.Len())
 	}
 
-	if len(got) != chain.Len() {
-		t.Fatalf("unexpected block count: want %d got %d", chain.Len(), len(got))
-	}
-
-	want := chain.Blocks()
-	for i := range want {
-		if got[i].Hash != want[i].Hash {
-			t.Fatalf("hash mismatch at index %d", i)
-		}
+	if err := chain.Validate(); err != nil {
+		t.Fatalf("chain invalid after push: %v", err)
 	}
 }
 
-func TestSyncChain(t *testing.T) {
-	remote := blockchain.NewBlockchainWithGenesis(time.Unix(1700000000, 0).UTC())
-	remote.AddBlockAt(nil, time.Unix(1700000100, 0).UTC())
-	remote.AddBlockAt(nil, time.Unix(1700000200, 0).UTC())
-
-	addr, cleanup := startTestServer(t, remote)
+func TestPushBlockRejectsBadBlock(t *testing.T) {
+	chain := blockchain.NewBlockchainWithGenesis(time.Unix(1700000000, 0).UTC())
+	addr, cleanup := startTestServer(t, chain)
 	defer cleanup()
 
-	local := blockchain.NewBlockchainWithGenesis(time.Unix(1700000000, 0).UTC())
+	bad := blockchain.NewBlock(
+		5,
+		"wrong-prev-hash",
+		nil,
+		time.Unix(1700000100, 0).UTC(),
+	)
 
-	if err := SyncChain(local, addr, 250*time.Millisecond); err != nil {
-		t.Fatalf("sync failed: %v", err)
+	if err := PushBlock(addr, bad, 250*time.Millisecond); err == nil {
+		t.Fatalf("expected push block to fail")
 	}
 
-	if local.Len() != remote.Len() {
-		t.Fatalf("unexpected length after sync: want %d got %d", remote.Len(), local.Len())
-	}
-
-	if err := local.Validate(); err != nil {
-		t.Fatalf("synced chain is invalid: %v", err)
+	if chain.Len() != 1 {
+		t.Fatalf("chain should not change after bad block")
 	}
 }
