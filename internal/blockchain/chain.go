@@ -1,6 +1,9 @@
 package blockchain
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -139,11 +142,10 @@ func (bc *Blockchain) ReplaceIfBetter(blocks []Block) error {
 	bc.mu.Lock()
 	defer bc.mu.Unlock()
 
-	if len(candidate.blocks) <= len(bc.blocks) {
-		return nil
+	if shouldReplaceChain(candidate.blocks, bc.blocks) {
+		bc.blocks = cloneBlockSlice(candidate.blocks)
 	}
 
-	bc.blocks = cloneBlockSlice(candidate.blocks)
 	return nil
 }
 
@@ -183,9 +185,30 @@ func (bc *Blockchain) Validate() error {
 	return nil
 }
 
-func cloneBlock(b Block) Block {
-	b.Transactions = cloneTransactions(b.Transactions)
-	return b
+func (bc *Blockchain) ChainDigest() string {
+	bc.mu.RLock()
+	defer bc.mu.RUnlock()
+
+	return chainDigest(bc.blocks)
+}
+
+func shouldReplaceChain(candidate, current []Block) bool {
+	if len(candidate) != len(current) {
+		return len(candidate) > len(current)
+	}
+
+	return chainDigest(candidate) < chainDigest(current)
+}
+
+func chainDigest(blocks []Block) string {
+	h := sha256.New()
+
+	for _, block := range blocks {
+		_, _ = h.Write([]byte(block.Hash))
+		_, _ = h.Write([]byte{0})
+	}
+
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func cloneBlockSlice(src []Block) []Block {
@@ -202,3 +225,42 @@ func cloneBlockSlice(src []Block) []Block {
 
 	return dst
 }
+
+func cloneBlock(b Block) Block {
+	b.Transactions = cloneTransactions(b.Transactions)
+	return b
+}
+
+func (bc *Blockchain) PreferredOver(other *Blockchain) bool {
+	if other == nil {
+		return true
+	}
+
+	bc.mu.RLock()
+	left := cloneBlockSlice(bc.blocks)
+	bc.mu.RUnlock()
+
+	other.mu.RLock()
+	right := cloneBlockSlice(other.blocks)
+	other.mu.RUnlock()
+
+	return shouldReplaceChain(left, right)
+}
+
+func (bc *Blockchain) PreferredOverBlocks(blocks []Block) bool {
+	bc.mu.RLock()
+	left := cloneBlockSlice(bc.blocks)
+	bc.mu.RUnlock()
+
+	return shouldReplaceChain(blocks, left)
+}
+
+func (bc *Blockchain) EqualDigest(blocks []Block) bool {
+	bc.mu.RLock()
+	left := cloneBlockSlice(bc.blocks)
+	bc.mu.RUnlock()
+
+	return chainDigest(left) == chainDigest(blocks)
+}
+
+var _ = bytes.Compare

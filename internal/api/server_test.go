@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Max-65/blockchain-go/internal/blockchain"
+	"github.com/Max-65/blockchain-go/internal/peers"
 )
 
 func TestCreateBlockAndReadChain(t *testing.T) {
@@ -17,7 +18,7 @@ func TestCreateBlockAndReadChain(t *testing.T) {
 	path := filepath.Join(dir, "chain.json")
 
 	chain := blockchain.NewBlockchainWithGenesis(time.Unix(1700000000, 0).UTC())
-	srv := NewServer(":0", chain, path, []string{})
+	srv := NewServer(":0", chain, path, &peers.Registry{})
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

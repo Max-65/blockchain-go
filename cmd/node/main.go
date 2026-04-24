@@ -14,6 +14,7 @@ import (
 	"github.com/Max-65/blockchain-go/internal/api"
 	"github.com/Max-65/blockchain-go/internal/blockchain"
 	"github.com/Max-65/blockchain-go/internal/network"
+	"github.com/Max-65/blockchain-go/internal/peers"
 	"github.com/Max-65/blockchain-go/internal/storage"
 )
 
@@ -21,11 +22,10 @@ func main() {
 	tcpAddr := env("NODE_ADDR", ":3000")
 	httpAddr := env("HTTP_ADDR", ":8080")
 	storePath := env("CHAIN_PATH", "./data/chain.json")
+	tcpPort := env("NODE_TCP_PORT", "3000")
 
-	peers := parsePeers(os.Getenv("PEERS"))
-	if singlePeer := strings.TrimSpace(os.Getenv("PEER_ADDR")); singlePeer != "" {
-		peers = appendUnique(peers, singlePeer)
-	}
+	seedPeers := parsePeers(os.Getenv("PEER_SEEDS"))
+	peerRegistry := peers.NewRegistry(seedPeers...)
 
 	chain, err := blockchain.LoadBlockchainFile(storePath)
 	switch {
@@ -36,18 +36,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	for _, peer := range peers {
-		if err := network.SyncChain(chain, peer, 3*time.Second); err != nil {
-			log.Printf("startup sync from %s failed: %v", peer, err)
-		}
-	}
-
 	if err := chain.SaveFile(storePath); err != nil {
 		log.Fatal(err)
 	}
 
 	tcpServer := network.NewServer(tcpAddr, chain)
-	httpServer := api.NewServer(httpAddr, chain, storePath, peers)
+	httpServer := api.NewServer(httpAddr, chain, storePath, peerRegistry)
 
 	errCh := make(chan error, 2)
 
@@ -63,11 +57,13 @@ func main() {
 		}
 	}()
 
+	go peerGossipLoop(chain, peerRegistry, tcpPort)
+
 	log.Printf("tcp listening on %s", tcpAddr)
 	log.Printf("http listening on %s", httpAddr)
 	log.Printf("storage: %s", storePath)
-	if len(peers) > 0 {
-		log.Printf("peers: %s", strings.Join(peers, ", "))
+	if len(seedPeers) > 0 {
+		log.Printf("seed peers: %s", strings.Join(seedPeers, ", "))
 	}
 
 	printChain(chain)
@@ -97,6 +93,34 @@ func main() {
 	}
 }
 
+func peerGossipLoop(chain *blockchain.Blockchain, registry *peers.Registry, tcpPort string) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	// Initial gossip immediately.
+	runPeerGossip(chain, registry, tcpPort)
+
+	for range ticker.C {
+		runPeerGossip(chain, registry, tcpPort)
+	}
+}
+
+func runPeerGossip(chain *blockchain.Blockchain, registry *peers.Registry, tcpPort string) {
+	snapshot := registry.List()
+
+	for _, peer := range snapshot {
+		remotePeers, err := network.ExchangePeers(peer, snapshot, 3*time.Second)
+		if err == nil {
+			registry.Merge(remotePeers)
+		}
+
+		tcpAddr, err := network.TCPAddrFromPeerURL(peer, tcpPort)
+		if err == nil {
+			_ = network.SyncChain(chain, tcpAddr, 3*time.Second)
+		}
+	}
+}
+
 func env(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
 		return v
@@ -110,7 +134,7 @@ func parsePeers(raw string) []string {
 	for _, part := range parts {
 		p := strings.TrimSpace(part)
 		if p != "" {
-			out = appendUnique(out, p)
+			out = append(out, p)
 		}
 	}
 	return out

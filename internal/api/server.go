@@ -10,30 +10,28 @@ import (
 
 	"github.com/Max-65/blockchain-go/internal/blockchain"
 	"github.com/Max-65/blockchain-go/internal/network"
+	"github.com/Max-65/blockchain-go/internal/peers"
 )
 
 type Server struct {
 	Addr      string
 	Chain     *blockchain.Blockchain
 	StorePath string
-	Peers     []string
+	Peers     *peers.Registry
 
 	srv *http.Server
 }
 
-func NewServer(addr string, chain *blockchain.Blockchain, storePath string, peers []string) *Server {
-	peerCopy := make([]string, 0, len(peers))
-	for _, p := range peers {
-		if p != "" {
-			peerCopy = append(peerCopy, p)
-		}
+func NewServer(addr string, chain *blockchain.Blockchain, storePath string, peerRegistry *peers.Registry) *Server {
+	if peerRegistry == nil {
+		peerRegistry = peers.NewRegistry()
 	}
 
 	return &Server{
 		Addr:      addr,
 		Chain:     chain,
 		StorePath: storePath,
-		Peers:     peerCopy,
+		Peers:     peerRegistry,
 	}
 }
 
@@ -43,6 +41,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/chain", s.handleChain)
 	mux.HandleFunc("/blocks", s.handleBlocks)
 	mux.HandleFunc("/sync", s.handleSync)
+	mux.HandleFunc("/peers", s.handlePeers)
 	return mux
 }
 
@@ -133,7 +132,7 @@ func (s *Server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(s.Peers) > 0 {
+	if len(s.Peers.List()) > 0 {
 		snapshot := s.Chain.Blocks()
 		go s.broadcastNewBlock(block, snapshot)
 	}
@@ -141,7 +140,7 @@ func (s *Server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"block":  block,
 		"length": s.Chain.Len(),
-		"peers":  len(s.Peers),
+		"peers":  len(s.Peers.List()),
 	})
 }
 
@@ -166,8 +165,8 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer := req.PeerAddr
-	if peer == "" && len(s.Peers) > 0 {
-		peer = s.Peers[0]
+	if peer == "" && len(s.Peers.List()) > 0 {
+		peer = s.Peers.List()[0]
 	}
 	if peer == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_addr is required"})
@@ -192,8 +191,31 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	if s.Peers == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "peer registry is nil"})
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, network.PeersMessage{Peers: s.Peers.List()})
+	case http.MethodPost:
+		var req network.PeersMessage
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json body"})
+			return
+		}
+
+		s.Peers.Merge(req.Peers)
+		writeJSON(w, http.StatusOK, network.PeersMessage{Peers: s.Peers.List()})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+	}
+}
+
 func (s *Server) broadcastNewBlock(block blockchain.Block, fullChain []blockchain.Block) {
-	for _, peer := range s.Peers {
+	for _, peer := range s.Peers.List() {
 		if err := network.PushBlock(peer, block, 3*time.Second); err == nil {
 			continue
 		}
