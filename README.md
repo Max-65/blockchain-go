@@ -2,38 +2,64 @@
 
 A small blockchain prototype written in Go.
 
-This project is intentionally simple. It focuses on the core data structures and validation logic first, without adding networking, storage, mining, or other extra pieces too early.
+The goal of this repository is to keep the core logic compact and testable. The project starts with a single-node chain, then adds persistence, network sync, HTTP control endpoints, peer discovery, and Docker-based verification.
 
-## Purpose
+## What this project does
 
-The goal of this repository is to build a minimal blockchain core that is:
+- stores blocks in memory;
+- validates chain integrity;
+- persists the chain to a JSON file;
+- syncs chains between nodes over TCP;
+- exposes a small HTTP API for inspection and control;
+- exchanges peer lists so nodes can discover each other from a seed set;
+- runs in Docker and Docker Compose;
+- includes unit tests and a simple end-to-end script.
 
-- easy to understand;
-- easy to test;
-- easy to extend later;
-- small enough to evolve step by step.
+## What is intentionally left out for now
 
-## What is included
+This prototype does not yet include:
 
-- blocks with an index, timestamp, transactions, previous hash, and current hash;
-- a simple transaction model;
-- an in-memory blockchain;
-- chain validation;
-- unit tests for hashing, block addition, and chain integrity;
-- GitHub Actions CI;
-- a Dockerfile for containerized execution.
-
-## What is not included yet
-
-This project does not currently implement:
-
-- peer-to-peer networking;
 - proof-of-work mining;
-- disk persistence;
 - wallets or addresses;
 - digital signatures;
-- mempool;
-- forks or chain selection rules;
-- Merkle trees.
+- mempool / transaction relay;
+- Merkle trees;
+- fork choice rules beyond a simple deterministic tie-breaker;
+- a full P2P protocol;
+- a database engine.
 
-These parts may be added later, but they are not part of the first working version.
+The project is kept small on purpose so each layer can be added and tested separately.
+
+## Current architecture
+
+The system is split into a few small parts:
+
+- `internal/blockchain` for blocks, chain validation, persistence hooks, and chain selection;
+- `internal/storage` for file-based JSON storage;
+- `internal/network` for TCP chain sync and peer exchange;
+- `internal/peers` for peer registry and normalization;
+- `internal/api` for the HTTP control plane;
+- `cmd/node/main.go` for wiring everything together.
+
+## HTTP endpoints
+
+The node exposes a small HTTP API:
+
+- `GET /health`
+- `GET /chain`
+- `POST /blocks`
+- `POST /sync`
+- `GET /peers`
+- `POST /peers`
+
+## TCP behavior
+
+The TCP side is used for chain transfer between nodes. A node can request a full chain, push a full chain, or push a single block with fallback to full-chain sync when needed.
+
+## Persistence
+
+The current storage layer writes the chain to a JSON file on disk. On startup the node tries to load the chain from that file. If the file does not exist, a new chain is created.
+
+## Peer discovery
+
+The node starts from a small seed list and exchanges peer lists over HTTP. This keeps the topology from being fully static while staying simple enough to reason about.
