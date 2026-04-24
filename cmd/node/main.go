@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -19,8 +20,12 @@ import (
 func main() {
 	tcpAddr := env("NODE_ADDR", ":3000")
 	httpAddr := env("HTTP_ADDR", ":8080")
-	peerAddr := os.Getenv("PEER_ADDR")
 	storePath := env("CHAIN_PATH", "./data/chain.json")
+
+	peers := parsePeers(os.Getenv("PEERS"))
+	if singlePeer := strings.TrimSpace(os.Getenv("PEER_ADDR")); singlePeer != "" {
+		peers = appendUnique(peers, singlePeer)
+	}
 
 	chain, err := blockchain.LoadBlockchainFile(storePath)
 	switch {
@@ -31,9 +36,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if peerAddr != "" {
-		if err := network.SyncChain(chain, peerAddr, 3*time.Second); err != nil {
-			log.Printf("peer sync failed: %v", err)
+	for _, peer := range peers {
+		if err := network.SyncChain(chain, peer, 3*time.Second); err != nil {
+			log.Printf("startup sync from %s failed: %v", peer, err)
 		}
 	}
 
@@ -42,7 +47,7 @@ func main() {
 	}
 
 	tcpServer := network.NewServer(tcpAddr, chain)
-	httpServer := api.NewServer(httpAddr, chain, storePath, peerAddr)
+	httpServer := api.NewServer(httpAddr, chain, storePath, peers)
 
 	errCh := make(chan error, 2)
 
@@ -61,8 +66,8 @@ func main() {
 	log.Printf("tcp listening on %s", tcpAddr)
 	log.Printf("http listening on %s", httpAddr)
 	log.Printf("storage: %s", storePath)
-	if peerAddr != "" {
-		log.Printf("startup peer sync: %s", peerAddr)
+	if len(peers) > 0 {
+		log.Printf("peers: %s", strings.Join(peers, ", "))
 	}
 
 	printChain(chain)
@@ -77,7 +82,10 @@ func main() {
 		log.Printf("server stopped: %v", err)
 	}
 
-	if err := httpServer.Shutdown(contextBackgroundTimeout(5 * time.Second)); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("http shutdown failed: %v", err)
 	}
 	if err := tcpServer.Close(); err != nil {
@@ -96,6 +104,27 @@ func env(name, fallback string) string {
 	return fallback
 }
 
+func parsePeers(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		p := strings.TrimSpace(part)
+		if p != "" {
+			out = appendUnique(out, p)
+		}
+	}
+	return out
+}
+
+func appendUnique(items []string, v string) []string {
+	for _, existing := range items {
+		if existing == v {
+			return items
+		}
+	}
+	return append(items, v)
+}
+
 func printChain(chain *blockchain.Blockchain) {
 	for _, block := range chain.Blocks() {
 		fmt.Printf(
@@ -107,13 +136,4 @@ func printChain(chain *blockchain.Blockchain) {
 			len(block.Transactions),
 		)
 	}
-}
-
-func contextBackgroundTimeout(timeout time.Duration) context.Context {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	go func() {
-		<-ctx.Done()
-		cancel()
-	}()
-	return ctx
 }

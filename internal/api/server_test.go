@@ -17,7 +17,7 @@ func TestCreateBlockAndReadChain(t *testing.T) {
 	path := filepath.Join(dir, "chain.json")
 
 	chain := blockchain.NewBlockchainWithGenesis(time.Unix(1700000000, 0).UTC())
-	srv := NewServer(":0", chain, path, "")
+	srv := NewServer(":0", chain, path, []string{})
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

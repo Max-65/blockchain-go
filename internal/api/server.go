@@ -16,17 +16,24 @@ type Server struct {
 	Addr      string
 	Chain     *blockchain.Blockchain
 	StorePath string
-	PeerAddr  string
+	Peers     []string
 
 	srv *http.Server
 }
 
-func NewServer(addr string, chain *blockchain.Blockchain, storePath, peerAddr string) *Server {
+func NewServer(addr string, chain *blockchain.Blockchain, storePath string, peers []string) *Server {
+	peerCopy := make([]string, 0, len(peers))
+	for _, p := range peers {
+		if p != "" {
+			peerCopy = append(peerCopy, p)
+		}
+	}
+
 	return &Server{
 		Addr:      addr,
 		Chain:     chain,
 		StorePath: storePath,
-		PeerAddr:  peerAddr,
+		Peers:     peerCopy,
 	}
 }
 
@@ -126,9 +133,15 @@ func (s *Server) handleBlocks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(s.Peers) > 0 {
+		snapshot := s.Chain.Blocks()
+		go s.broadcast(snapshot)
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"block":  block,
 		"length": s.Chain.Len(),
+		"peers":  len(s.Peers),
 	})
 }
 
@@ -153,8 +166,8 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer := req.PeerAddr
-	if peer == "" {
-		peer = s.PeerAddr
+	if peer == "" && len(s.Peers) > 0 {
+		peer = s.Peers[0]
 	}
 	if peer == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "peer_addr is required"})
@@ -173,10 +186,21 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if len(s.Peers) > 0 {
+		snapshot := s.Chain.Blocks()
+		go s.broadcast(snapshot)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"length": s.Chain.Len(),
 		"blocks": s.Chain.Blocks(),
 	})
+}
+
+func (s *Server) broadcast(blocks []blockchain.Block) {
+	for _, peer := range s.Peers {
+		_ = network.PushChain(peer, blocks, 3*time.Second)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

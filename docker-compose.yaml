@@ -6,6 +6,7 @@ services:
       NODE_ADDR: ":3000"
       HTTP_ADDR: ":8080"
       CHAIN_PATH: "/data/chain.json"
+      PEERS: "node2:3000"
     ports:
       - "3000:3000"
       - "8080:8080"
@@ -18,8 +19,8 @@ services:
     environment:
       NODE_ADDR: ":3000"
       HTTP_ADDR: ":8080"
-      PEER_ADDR: "node1:3000"
       CHAIN_PATH: "/data/chain.json"
+      PEERS: "node1:3000"
     ports:
       - "3001:3000"
       - "8081:8080"
